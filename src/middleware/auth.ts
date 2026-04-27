@@ -48,3 +48,4 @@ export function generateToken(payload: AuthPayload): string {
 }
 
 export { JWT_SECRET };
+export { authMiddleware as authenticate };
