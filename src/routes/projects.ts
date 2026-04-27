@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import db from "../db.js";
 import { authMiddleware } from "../middleware/auth.js";
+import { requireProjectAccess } from "../middleware/permissions.js";
 
 const router = Router();
 
@@ -19,14 +20,15 @@ interface ProjectRow {
 router.get("/", (req: Request, res: Response) => {
   const projects = db
     .prepare(
-      `SELECT p.*, COUNT(t.id) as task_count
+      `SELECT p.*, COUNT(t.id) as task_count, pm.role as user_role
        FROM projects p
        LEFT JOIN tasks t ON t.project_id = p.id
-       WHERE p.owner_id = ?
+       LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = ?
+       WHERE p.owner_id = ? OR pm.user_id = ?
        GROUP BY p.id
        ORDER BY p.created_at DESC`
     )
-    .all(req.user!.userId);
+    .all(req.user!.userId, req.user!.userId, req.user!.userId);
 
   res.json({ projects });
 });
@@ -49,16 +51,16 @@ router.post("/", (req: Request, res: Response) => {
 });
 
 // GET /api/projects/:id
-router.get("/:id", (req: Request, res: Response) => {
+router.get("/:id", requireProjectAccess(), (req: Request, res: Response) => {
   const project = db
     .prepare(
       `SELECT p.*, COUNT(t.id) as task_count
        FROM projects p
        LEFT JOIN tasks t ON t.project_id = p.id
-       WHERE p.id = ? AND p.owner_id = ?
+       WHERE p.id = ?
        GROUP BY p.id`
     )
-    .get(req.params.id, req.user!.userId) as ProjectRow | undefined;
+    .get(req.params.id) as ProjectRow | undefined;
 
   if (!project) {
     res.status(404).json({ error: "Project not found" });
@@ -69,11 +71,11 @@ router.get("/:id", (req: Request, res: Response) => {
 });
 
 // PUT /api/projects/:id
-router.put("/:id", (req: Request, res: Response) => {
+router.put("/:id", requireProjectAccess("admin"), (req: Request, res: Response) => {
   const { name, description } = req.body;
   const existing = db
-    .prepare("SELECT * FROM projects WHERE id = ? AND owner_id = ?")
-    .get(req.params.id, req.user!.userId) as ProjectRow | undefined;
+    .prepare("SELECT * FROM projects WHERE id = ?")
+    .get(req.params.id) as ProjectRow | undefined;
 
   if (!existing) {
     res.status(404).json({ error: "Project not found" });
@@ -91,10 +93,10 @@ router.put("/:id", (req: Request, res: Response) => {
 });
 
 // DELETE /api/projects/:id
-router.delete("/:id", (req: Request, res: Response) => {
+router.delete("/:id", requireProjectAccess("owner"), (req: Request, res: Response) => {
   const existing = db
-    .prepare("SELECT * FROM projects WHERE id = ? AND owner_id = ?")
-    .get(req.params.id, req.user!.userId) as ProjectRow | undefined;
+    .prepare("SELECT * FROM projects WHERE id = ?")
+    .get(req.params.id) as ProjectRow | undefined;
 
   if (!existing) {
     res.status(404).json({ error: "Project not found" });
