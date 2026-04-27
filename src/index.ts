@@ -21,6 +21,16 @@ import userRoutes from "./routes/users.js";
 import labelRoutes from "./routes/labels.js";
 import timeTrackingRoutes from "./routes/time-tracking.js";
 import activityRoutes from "./routes/activity.js";
+import templateRoutes from "./routes/templates.js";
+import dependencyRoutes from "./routes/dependencies.js";
+import checklistRoutes from "./routes/checklists.js";
+import filterRoutes from "./routes/filters.js";
+import adminRoutes from "./routes/admin.js";
+import apiKeyRoutes from "./routes/api-keys.js";
+import automationRoutes from "./routes/automations.js";
+import recurringRoutes from "./routes/recurring.js";
+import integrationRoutes from "./routes/integrations.js";
+import { auditMiddleware } from "./middleware/audit.js";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -31,6 +41,7 @@ app.use(express.json());
 app.use(cookieParser());
 app.use(rateLimiter);
 app.use(requestLogger);
+app.use(auditMiddleware);
 
 // Static files
 app.use(express.static(path.join(process.cwd(), "public")));
@@ -58,13 +69,20 @@ app.use("/api/users", userRoutes);
 app.use("/api", labelRoutes);
 app.use("/api", timeTrackingRoutes);
 app.use("/api", activityRoutes);
+app.use("/api/templates", templateRoutes);
+app.use("/api", dependencyRoutes);
+app.use("/api", checklistRoutes);
+app.use("/api", filterRoutes);
+app.use("/api/admin", adminRoutes);
+app.use("/api/settings/api-keys", apiKeyRoutes);
+app.use("/api", automationRoutes);
+app.use("/api", recurringRoutes);
+app.use("/api", integrationRoutes);
 
 // Global error handler (must be registered after all routes)
 app.use(errorHandler);
 
-// Initialize database and start server
-initializeDatabase();
-
+// Start server (database is initialized eagerly in db.ts)
 app.listen(PORT, () => {
   console.log(`Taskflow server running on http://localhost:${PORT}`);
 });

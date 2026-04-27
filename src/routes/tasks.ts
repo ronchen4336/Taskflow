@@ -5,6 +5,8 @@ import fs from "fs";
 import db from "../db.js";
 import { authMiddleware } from "../middleware/auth.js";
 import { requireProjectAccess } from "../middleware/permissions.js";
+import { checkBlockingDependencies } from "./dependencies.js";
+import { evaluateAutomations } from "../services/automations.js";
 
 const router = Router();
 
@@ -176,7 +178,11 @@ router.post("/projects/:projectId/tasks", requireProjectAccess(), (req: Request,
       maxPos.max_pos + 1
     );
 
-  const task = db.prepare("SELECT * FROM tasks WHERE id = ?").get(result.lastInsertRowid);
+  const task = db.prepare("SELECT * FROM tasks WHERE id = ?").get(result.lastInsertRowid) as TaskRow;
+
+  // Trigger automations for new task
+  evaluateAutomations("task.created", task);
+
   res.status(201).json({ task });
 });
 
@@ -229,6 +235,18 @@ router.put("/tasks/:id", (req: Request, res: Response) => {
     return;
   }
 
+  // Check blocking dependencies when changing status
+  if (status && status !== existing.status) {
+    const depCheck = checkBlockingDependencies(existing.id, status);
+    if (depCheck.blocked) {
+      res.status(409).json({
+        error: "Task is blocked by incomplete dependencies",
+        blockers: depCheck.blockers,
+      });
+      return;
+    }
+  }
+
   const updatedTitle = title || existing.title;
   const updatedDescription = description ?? existing.description;
   const updatedStatus = status || existing.status;
@@ -272,7 +290,19 @@ router.put("/tasks/:id", (req: Request, res: Response) => {
      WHERE id = ?`
   ).run(updatedTitle, updatedDescription, updatedStatus, updatedPriority, updatedAssignee, updatedDueDate, updatedEstimatedHours, updatedAt, req.params.id);
 
-  const task = db.prepare("SELECT * FROM tasks WHERE id = ?").get(req.params.id);
+  const task = db.prepare("SELECT * FROM tasks WHERE id = ?").get(req.params.id) as TaskRow;
+
+  // Trigger automations for task changes
+  const changes: Record<string, unknown> = {};
+  if (status && status !== existing.status) {
+    changes.status = { old: existing.status, new: status };
+    evaluateAutomations("task.status_changed", task, changes);
+  }
+  if (assignee_id !== undefined && assignee_id !== existing.assignee_id) {
+    changes.assignee_id = { old: existing.assignee_id, new: assignee_id };
+    evaluateAutomations("task.assigned", task, changes);
+  }
+
   res.json({ task });
 });
 

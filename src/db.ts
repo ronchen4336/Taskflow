@@ -1,6 +1,6 @@
 import Database, { Database as DatabaseType } from "better-sqlite3";
 import bcrypt from "bcryptjs";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import path from "path";
 
 const DB_PATH = path.join(process.cwd(), "taskflow.db");
@@ -142,6 +142,135 @@ export function initializeDatabase(): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       expires_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS project_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT,
+      structure TEXT NOT NULL DEFAULT '{}',
+      created_by INTEGER NOT NULL REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS task_dependencies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      depends_on_task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      type TEXT NOT NULL DEFAULT 'blocks',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS task_checklists (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS checklist_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      checklist_id INTEGER NOT NULL REFERENCES task_checklists(id) ON DELETE CASCADE,
+      text TEXT NOT NULL,
+      completed INTEGER NOT NULL DEFAULT 0,
+      position INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS saved_filters (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      filter TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS automations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL REFERENCES projects(id),
+      name TEXT NOT NULL,
+      trigger TEXT NOT NULL,
+      conditions TEXT NOT NULL DEFAULT '[]',
+      actions TEXT NOT NULL DEFAULT '[]',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_by INTEGER NOT NULL REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS automation_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      automation_id INTEGER NOT NULL REFERENCES automations(id),
+      task_id INTEGER NOT NULL,
+      trigger TEXT NOT NULL,
+      result TEXT NOT NULL DEFAULT 'success',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS recurring_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL REFERENCES projects(id),
+      title TEXT NOT NULL,
+      description TEXT,
+      priority TEXT NOT NULL DEFAULT 'medium',
+      assignee_id INTEGER REFERENCES users(id),
+      recurrence TEXT NOT NULL DEFAULT '{}',
+      next_run TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_by INTEGER NOT NULL REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER REFERENCES users(id),
+      action TEXT NOT NULL,
+      resource_type TEXT NOT NULL,
+      resource_id TEXT,
+      details TEXT,
+      ip_address TEXT,
+      user_agent TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      name TEXT NOT NULL,
+      key_hash TEXT NOT NULL,
+      prefix TEXT NOT NULL,
+      permissions TEXT NOT NULL DEFAULT '[]',
+      last_used TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      expires_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      token_hash TEXT NOT NULL,
+      ip_address TEXT,
+      user_agent TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_active TEXT NOT NULL DEFAULT (datetime('now')),
+      revoked INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS announcements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      created_by INTEGER NOT NULL REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS integrations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL REFERENCES projects(id),
+      type TEXT NOT NULL CHECK(type IN ('slack', 'email', 'github')),
+      config TEXT NOT NULL DEFAULT '{}',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_by INTEGER NOT NULL REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 
   seedData();
@@ -281,6 +410,134 @@ function seedData(): void {
   );
   const expiredDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   insertInvitation.run("carol@test.com", 1, 1, randomUUID(), "pending", expiredDate);
+
+  // Seed project template — "Sprint Template" with 5 predefined tasks
+  const insertTemplate = db.prepare(
+    "INSERT INTO project_templates (name, description, structure, created_by) VALUES (?, ?, ?, ?)"
+  );
+  const sprintTemplate = {
+    tasks: [
+      { title: "Sprint planning", description: "Define sprint goals and assign tasks", status: "todo", priority: "high", assignee_id: 1, estimated_hours: 2, position: 0 },
+      { title: "Design review", description: "Review UI/UX designs for sprint deliverables", status: "todo", priority: "medium", assignee_id: 2, estimated_hours: 4, position: 1 },
+      { title: "Implementation", description: "Build features defined in sprint planning", status: "todo", priority: "high", assignee_id: 1, estimated_hours: 20, position: 2 },
+      { title: "QA testing", description: "Test all implemented features against acceptance criteria", status: "todo", priority: "high", assignee_id: 2, estimated_hours: 8, position: 3 },
+      { title: "Sprint retrospective", description: "Review what went well and what to improve", status: "todo", priority: "medium", assignee_id: 1, estimated_hours: 1, position: 4 },
+    ],
+    labels: [
+      { name: "Sprint", color: "#f59e0b" },
+      { name: "Blocker", color: "#ef4444" },
+    ],
+  };
+  insertTemplate.run("Sprint Template", "Standard two-week sprint with planning, implementation, QA, and retro", JSON.stringify(sprintTemplate), 1);
+
+  // Seed task dependencies — 3 dependencies on project 1 tasks
+  const insertDep = db.prepare(
+    "INSERT INTO task_dependencies (task_id, depends_on_task_id, type) VALUES (?, ?, ?)"
+  );
+  // "Implement responsive nav" (2) depends on "Design new homepage mockup" (1)
+  insertDep.run(2, 1, "blocks");
+  // "SEO audit" (4) depends on "Implement responsive nav" (2)
+  insertDep.run(4, 2, "blocks");
+  // "Set up analytics tracking" (5) is related to "SEO audit" (4)
+  insertDep.run(5, 4, "related");
+
+  // Seed checklist on task 2 ("Implement responsive nav") with 4 items
+  const insertChecklist = db.prepare(
+    "INSERT INTO task_checklists (task_id) VALUES (?)"
+  );
+  insertChecklist.run(2);
+
+  const insertChecklistItem = db.prepare(
+    "INSERT INTO checklist_items (checklist_id, text, completed, position) VALUES (?, ?, ?, ?)"
+  );
+  insertChecklistItem.run(1, "Build mobile hamburger menu", 1, 0);
+  insertChecklistItem.run(1, "Add tablet breakpoint styles", 0, 1);
+  insertChecklistItem.run(1, "Implement dropdown submenus", 0, 2);
+  insertChecklistItem.run(1, "Test across Safari, Chrome, Firefox", 0, 3);
+
+  // Seed saved filter on project 1
+  const insertFilter = db.prepare(
+    "INSERT INTO saved_filters (user_id, project_id, name, filter) VALUES (?, ?, ?, ?)"
+  );
+  const highPriorityFilter = { status: "todo", priority: "high" };
+  insertFilter.run(1, 1, "High Priority TODO", JSON.stringify(highPriorityFilter));
+
+  // Seed API key for Alice (prefix: 'tf_live_')
+  const rawKey = `tf_live_${randomUUID().replace(/-/g, "")}`;
+  const keyHash = createHash("sha256").update(rawKey).digest("hex");
+  const insertApiKey = db.prepare(
+    "INSERT INTO api_keys (user_id, name, key_hash, prefix, permissions, expires_at) VALUES (?, ?, ?, ?, ?, ?)"
+  );
+  insertApiKey.run(1, "Default API Key", keyHash, rawKey.slice(0, 12), JSON.stringify(["read", "write"]), new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString());
+
+  // Seed a few audit log entries
+  const insertAudit = db.prepare(
+    "INSERT INTO audit_log (user_id, action, resource_type, resource_id, details, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  );
+  insertAudit.run(1, "login", "user", "1", JSON.stringify({ method: "password" }), "127.0.0.1", "Mozilla/5.0 (Macintosh)");
+  insertAudit.run(1, "create", "project", "1", JSON.stringify({ name: "Website Redesign" }), "127.0.0.1", "Mozilla/5.0 (Macintosh)");
+  insertAudit.run(2, "create", "task", "9", JSON.stringify({ title: "Set up React Native project" }), "192.168.1.10", "Mozilla/5.0 (Windows)");
+  insertAudit.run(1, "update", "task", "1", JSON.stringify({ field: "status", from: "todo", to: "done" }), "127.0.0.1", "Mozilla/5.0 (Macintosh)");
+  insertAudit.run(1, "export", "project", "1", JSON.stringify({ format: "csv" }), "127.0.0.1", "Mozilla/5.0 (Macintosh)");
+
+  // Seed automations — 2 rules
+  const insertAutomation = db.prepare(
+    "INSERT INTO automations (project_id, name, trigger, conditions, actions, created_by) VALUES (?, ?, ?, ?, ?, ?)"
+  );
+
+  // Rule 1: Auto-assign critical bugs to Alice (user 1)
+  insertAutomation.run(
+    1,
+    "Auto-assign critical bugs to Alice",
+    "task.created",
+    JSON.stringify([
+      { field: "priority", op: "eq", value: "critical" }
+    ]),
+    JSON.stringify([
+      { type: "assign_to", value: 1 },
+      { type: "set_label", value: "Bug" }
+    ]),
+    1
+  );
+
+  // Rule 2: Auto-label tasks with "urgent" in the title
+  insertAutomation.run(
+    1,
+    "Auto-label urgent tasks",
+    "task.created",
+    JSON.stringify([
+      { field: "title", op: "contains", value: "urgent" }
+    ]),
+    JSON.stringify([
+      { type: "set_label", value: "Bug" },
+      { type: "send_notification", value: "Urgent task created" }
+    ]),
+    1
+  );
+
+  // Seed recurring task template — weekly standup notes
+  const insertRecurring = db.prepare(
+    `INSERT INTO recurring_tasks (project_id, title, description, priority, assignee_id, recurrence, next_run, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+
+  const nextMonday = new Date();
+  nextMonday.setUTCDate(nextMonday.getUTCDate() + ((8 - nextMonday.getUTCDay()) % 7 || 7));
+  nextMonday.setUTCHours(9, 0, 0, 0);
+
+  insertRecurring.run(
+    1,
+    "Weekly standup notes",
+    "Compile standup notes and blockers for the week",
+    "medium",
+    1,
+    JSON.stringify({ type: "weekly", day_of_week: 1 }),
+    nextMonday.toISOString(),
+    1
+  );
 }
+
+// Initialize eagerly so tables exist before any module-level db.prepare() calls
+initializeDatabase();
 
 export default db;
